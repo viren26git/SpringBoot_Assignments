@@ -1,0 +1,214 @@
+
+1) open 1st cmd --> Generate a Kafka Cluster ID
+D:\Kafka\kafka_2.13-4.3.1> bin\windows\kafka-storage.bat random-uuid
+
+o/p --> BXHLzlC_SK6Vm5VQaXiqsQ - cluster id
+
+2) in 1st cmd --> run -->
+D:\Kafka\kafka_2.13-4.3.1>bin\windows\kafka-storage.bat format --standalone -t BXHLzlC_SK6Vm5VQaXiqsQ -c config\server.properties
+(if it is already formatted then don't run the above command but run the command below)
+
+Start the Kakfa cluster(below command)
+run --> D:\Kafka\kafka_2.13-4.3.1>bin\windows\kafka-server-start.bat config\server.properties
+
+
+3) open 2nd cmd --> run --> create order-events topic
+D:\Kafka\kafka_2.13-4.3.1> bin\windows\kafka-topics.bat --create --topic order-events --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+To check the information about the partitions and topics  run below command :
+bin\kafka-topics.bat --describe --topic order-events --bootstrap-server localhost:9092
+
+4) in same 2nd cmd --> run --> create inventory-events topic
+D:\Kafka\kafka_2.13-4.3.1> bin\windows\kafka-topics.bat --create --topic inventory-events --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+5) in same 2nd cmd --> run --> create billing-events topic
+D:\Kafka\kafka_2.13-4.3.1> bin\windows\kafka-topics.bat --create --topic billing-events --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+**Note** :Partitions = 3 / Replication = 1
+For learning, one broker means replication factor 1.
+
+
+6) in same 2nd cmd --> run --> show all topics
+D:\Kafka\kafka_2.13-4.3.1> bin\windows\kafka-topics.bat --list --bootstrap-server localhost:9092
+
+
+ Kafka 4.3.1
+                 KRaft Mode
+                     |
+             localhost:9092
+                     |
+       +-------------+-------------+
+       |             |             |
+       ▼             ▼             ▼
+ order-events  inventory-events  billing-events
+   3 partitions   3 partitions    3 partitions
+
+===============================================================================================
+
+Now create D:\Java_Projects\ecommerce-kafka
+│
+├── order-service
+├── inventory-service
+└── billing-service
+
+
+How to run the project below in VS terminal
+
+1) .\mvnw.cmd clean install
+2) Press Ctrl + Shift + P  --> Search: --> Java: Clean Java Language Server Workspace
+Select it.
+3) .\mvnw.cmd spring-boot:run
+
+===============================TEST IN POSTMAN========================================
+Postman
+   ↓
+POST /orders
+   ↓
+OrderController
+   ↓
+OrderProducer
+   ↓
+KafkaTemplate
+   ↓
+Kafka Producer
+   ↓
+order-created topic
+   ↓
+Kafka Broker
+
+
+(1) Use  --> POST http://localhost:8080/orders
+Body:
+{
+    "orderId": "ORD-1001",
+    "productId": "PROD-101",
+    "quantity": 2,
+    "amount": 1500.0
+}
+
+========= Open 3rd cmd as consumer to check it =================
+run:
+D:\Kafka\kafka_2.13-4.3.1>.\bin\windows\kafka-console-consumer.bat --topic order-events --bootstrap-server localhost:9092 --from-beginning
+
+================= after creating inventory service ==============
+
+Open 2nd terminal -->  run the project below in VS terminal
+
+1) .\mvnw.cmd clean install
+2) .\mvnw.cmd spring-boot:run
+
+and run in postman
+
+(1) Use  --> POST http://localhost:8080/orders
+Body:
+{
+    "orderId": "ORD-1005",
+    "productId": "LAPTOP-101",
+    "quantity": 2,
+    "amount": 1500.0
+}
+
+see in console of terminal of inventory service
+=================================
+Inventory Service received order
+Order ID    : ORD-105
+Product ID  : LAPTOP-01
+Quantity    : 2
+Reserving inventory...
+Inventory reserved successfully
+=================================
+
+======================================= FLOW ==========================
+Now we have:
+
+Order Service
+     |
+     | Producer
+     v
+Kafka
+     |
+     | order-events
+     v
+Inventory Service
+     |
+     | Consumer
+     v
+InventoryConsumer
+
+Also,
+Now understand offset with our actual example
+Suppose Kafka has:
+
+order-events / Partition 0
+
+Offset       Order
+-------------------------
+0            ORD-101
+1            ORD-102
+2            ORD-103
+
+Inventory consumer reads:  ORD-101
+then:
+offset = 0
+
+After successful processing, the group progresses.
+Then: ORD-102
+is processed.
+
+Then: ORD-103
+
+If Inventory crashes while processing ORD-103, the offset may not have been committed for that record.
+After restart:
+Inventory Service
+       |
+       v
+Kafka
+       |
+       v
+ORD-103
+
+can be delivered again. Therefore your Inventory code should be safe if:
+
+ORD-103 is processed twice.
+
+
+This is why idempotent consumers are important
+
+Imagine:
+
+ORD-101
+
+causes:
+
+Inventory quantity = 10
+
+Consumer receives order:
+
+quantity = 2
+
+and reserves:
+
+10 - 2 = 8
+
+If the same message is accidentally processed again:
+
+8 - 2 = 6
+
+That is WRONG.
+
+Therefore, in a real Inventory Service, we need something like:
+
+Processed Events
+-------------------------
+ORD-101
+ORD-102
+
+Before processing:
+
+Is ORD-101 already processed?
+
+If yes:
+
+Ignore duplicate
+
+This is consumer-side idempotency.
